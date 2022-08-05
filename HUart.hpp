@@ -1,5 +1,4 @@
 /*
-    Copyright (C) 2021 by WILLFAR.
                      ,----------------,              ,---------,
                 ,-----------------------,          ,"        ,"|
               ,"                      ,"|        ,"        ,"  |
@@ -43,12 +42,14 @@
 #include <sys/time.h>
 #include <map>
 #include <stdlib.h>
+#include <chrono>
+#define _HAL_HLOG__ 1
 #ifdef _HAL_HLOG__
 #include "../../hal_hlog.h"
 #define HUART_DEBUG(fmt, ...) HalLogStdout(__LINE__, __FILE__, name.c_str(), fmt, ##__VA_ARGS__)
 #endif
 #ifndef HUART_DEBUG
-#define HUART_DEBUG printf
+#define HUART_DEBUG(fmt, ...) printf(  fmt "%d\n" ,  ##__VA_ARGS__, __LINE__)
 #endif
 
 class HUart
@@ -118,6 +119,8 @@ class HUart
         tcsetattr(fd, TCSANOW, &ios );
 
         tcflush(fd, TCIFLUSH);
+
+        set(9600,8,1,1);
         return true;
     }
 
@@ -184,7 +187,11 @@ public:
             len = 1024;
         }
 
+        auto start = std::chrono::steady_clock::now();
+        auto leftms = seconds*1000 + useconds/1000;
+
 #if true
+        SELECT_START:
         fd_set readfs;
         struct timeval timeout;
         FD_ZERO(&readfs);
@@ -210,6 +217,7 @@ public:
             return 0;
         }
         uint32_t index = 0;
+        int tryCount = 0;
         while(true)
         {
             auto toberead = len - index;
@@ -220,10 +228,19 @@ public:
             recvlen = read(fd, &buf[index], toberead);
             if (recvlen < 0)
             {
-                if(recvlen == EAGAIN || recvlen == EINTR){
-                    continue;
+                if(errno == EAGAIN || errno == EINTR){
+                    usleep(20*1000);
+                    if(tryCount>3)
+                    {
+                        HUART_DEBUG("try   cnt >  3, break");
+                        break;
+                    }
+                    HUART_DEBUG("try again: cnt(%d)", tryCount++);
+                    break;
+//                    usleep(1000*1000);
+//                    continue;
                 }
-                HUART_DEBUG("read %u err, close and reopen", fd);
+                HUART_DEBUG("read %u err(%d):%s close and reopen", fd, errno, strerror(errno));
                 sclose();
                 doOpen();
                 return -3;
@@ -233,12 +250,24 @@ public:
                 HUART_DEBUG("read %d", recvlen);
                 index += recvlen;
                 usleep(20*1000);
+                tryCount = 0;
             }
             else //(recvlen == 0)
             {
                 break;
             }
         }
+
+        auto end = std::chrono::steady_clock::now();
+        auto past = std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count();
+        if(index == 0 && past < leftms)
+        {
+            leftms -= past;
+            seconds = leftms/1000;
+            useconds = leftms%1000*1000000;
+            goto SELECT_START;
+        }
+
         return index;
 #else
 
