@@ -71,13 +71,19 @@ namespace hhutils
     {
     public:
         static std::string getFileName(const std::string &path)
-        {
+        {            
             auto p = path.rfind("/");
+            if(p==std::string::npos){
+                return path;
+            }
             return path.substr(p + 1);
         }
         static std::string getDir(const std::string &path)
         {
             auto p = path.rfind("/");
+            if(p==std::string::npos){
+                return path;
+            }
             return path.substr(0, p);
         }
 
@@ -94,7 +100,7 @@ namespace hhutils
 
             bool lock()
             {
-                int fd = open(lockpath.c_str(), O_CREAT | O_RDWR, 00777);
+                fd = open(lockpath.c_str(), O_CREAT | O_RDWR, 00777);
                 if (fd < 0)
                 {
                     printf(" set lock: open file %s error %s\n", lockpath.c_str(), strerror(errno));
@@ -137,6 +143,48 @@ namespace hhutils
         }
     };
 
+    class FileLock
+    {
+        int fd;
+        std::string file;
+    public:
+        FileLock(const std::string &path)
+        {
+            file = path+".lock";
+        }
+        bool lock()
+        {
+            if(fd < 0)
+            {
+                fd = open(file.c_str(), O_CREAT | O_RDWR, 00777);
+                if (fd < 0)
+                {
+                    return false;
+                }
+            }
+            if (flock(fd, LOCK_EX) != 0)
+            {
+                close(fd);
+                fd = -1;
+                return false;
+            }
+            return true;
+        }
+
+        void unlock()
+        {
+            if (fd < 0)
+            {
+                return;
+            }
+            flock(fd, LOCK_UN);
+            close(fd);
+            fd = -1;
+        }
+    };
+
+
+
     class HTimer
     {
     protected:
@@ -172,20 +220,20 @@ namespace hhutils
             repeatTimes = repeatsCnt;
         }
 
-        HTimer(time_t timerMs, TimerHandler handler, const std::string &name = "")
+        HTimer(time_t timerMs, TimerHandler handler, const std::string &aname = "")
         {
             static std::atomic_int timeCnt = {0};
             type = E_HTIMER_TYPE::ONCE;
             intervalMs = timerMs;
             valid = true;
             reset();
-            if (name.empty())
+            if (aname.empty())
             {
                 timerName = std::to_string(timeCnt++);
             }
             else
             {
-                timerName = name;
+                timerName = aname;
                 timeCnt++;
             }
             activeHandler = handler;
@@ -280,7 +328,7 @@ namespace hhutils
     {
     public:
         virtual ~HTask() {}
-        HTask(uint32_t intervalMs) : HTimer(intervalMs)
+        HTask(uint32_t aintervalMs) : HTimer(aintervalMs)
         {
         }
     };
@@ -288,6 +336,19 @@ namespace hhutils
     class System
     {
     public:
+
+        static std::string getProcName()
+        {
+            char buf[1024] = { 0 };
+            int n;
+            n = readlink("/proc/self/exe" , buf , sizeof(buf));
+            if( n > 0 && n < (int)sizeof(buf))
+            {
+                return buf;
+            }
+            return "";
+        }
+
         static std::string doSystemCmd(const std::string cmd)
         {
             FILE *fp;
@@ -896,11 +957,13 @@ namespace hhutils
         bool static hexToBin(const std::string &hexStr, std::vector<uint8_t> &hexVec)
         {
             hexVec.clear();
+            auto purehex = hexStr;
+            purehex = hutils::replace(purehex, " ","");
             try
             {
-                for (size_t i = 0; i < hexStr.length(); i += 2)
+                for (size_t i = 0; i < purehex.length(); i += 2)
                 {
-                    std::string hex = "0x" + hexStr.substr(i, 2);
+                    std::string hex = "0x" + purehex.substr(i, 2);
                     auto bin = std::stoul(hex, 0, 16);
 
                     //                LOGDBG("utils","s(%s)->bin(%02X)", hex.c_str(), bin&0xff);
